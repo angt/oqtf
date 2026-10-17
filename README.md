@@ -51,14 +51,19 @@ The shell stays. Every program you start from it lives for 2m30s at most.
 -h, --help     Show this help
 ```
 
-Options work before or after the time. Use `-s` for shells and
-supervisors:
+Options work before or after the time. Use `-s` for a shell:
 
 ```
-oqtf 30m -s tmux
+oqtf 30m -s
 ```
 
-`tmux` stays. Its programs get thirty minutes each.
+`-s` keeps the command alive. Every program it runs gets thirty
+minutes, on its own.
+
+`-s` supervises what runs inside its cgroup, and nothing else. It does
+not fit commands that hand work to a daemon somewhere else: a `tmux`
+server you attached to is outside the group, and a `tmux` server that
+`oqtf` started is inside, so it too stops when its time is up.
 
 `--` ends the options. Everything after it is the command.
 
@@ -67,29 +72,43 @@ oqtf 30m -s tmux
 `oqtf` makes a new cgroup and moves itself into it. The command starts in
 the same cgroup, and everything it spawns is born there too.
 
-Every fraction of a second, `oqtf` reads `cgroup.procs` in that cgroup.
+Every fraction of a second, `oqtf` walks the cgroup and its subgroups.
 A process older than the time gets `SIGKILL`. The cgroup is the complete
-list, so no process can hide.
+list, so no process can hide. Before signalling a process, `oqtf` pins
+it in `/proc`, so a process that died in the meantime can not make
+`oqtf` signal an unrelated process that reused the pid.
 
 The command gets `SIGTERM` at the time limit, then `SIGKILL` two seconds
-later.
+later. A command that made itself impossible to signal is stopped
+anyway: the final kill goes through `cgroup.kill`, which the kernel
+enforces on every process in the group, whatever its privileges.
 
-As root, the command runs in its own cgroup namespace. It can not move
-itself out.
+With root, the command runs in its own cgroup namespace, over a cgroup
+filesystem that starts at its group. It can not move itself, or anything
+it spawns, out of the group. Without root, that confinement is not
+available: the command stays in the group by itself, and the timeout
+still applies.
 
-When the command exits, `oqtf` stops what is left, moves itself out, and
-removes the cgroup.
+When the command exits, `oqtf` stops what is left, removes any subgroup,
+moves itself out, and removes the cgroup.
+
+Signals sent to `oqtf` itself are ignored: acting on them would leave
+the command running with nobody to clean up. A terminal interrupt goes
+to the command as usual, and `oqtf` then cleans up.
 
 ## Permissions
 
-You need write access to the cgroup. This usually means `sudo`:
+`oqtf` needs to create a cgroup inside your current one. With `sudo` it
+always works:
 
 ```
 sudo oqtf 1m make
 ```
 
-Most modern distros give your user session its own cgroups. Then you do
-not need `sudo`.
+Without `sudo` it works when your current cgroup is writable and may
+have subgroups. That depends on how your session was set up; if it is
+not, `oqtf` says so before running anything. Root is also what buys the
+command its confinement.
 
 ## Exit code
 
